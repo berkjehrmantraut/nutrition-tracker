@@ -25,18 +25,13 @@
     .footer { margin-top: 18px; font-size: 13px; color: #555; }
     .tiny { font-size: 12px; color: #666; margin-top: 4px; }
     .err { color: #c00; white-space: pre-wrap; }
-    input[type="text"] { width: 100%; max-width: 560px; padding: 10px 12px; border-radius: 10px; border: 1px solid #ccc; font-size: 14px; }
-    .controls { margin: 10px 0 6px; }
   </style>
 </head>
 <body>
   <h1>Food Group Tracker</h1>
-  <div class="muted">Tap a button to add <b>+1</b> for today. If today isn’t in the sheet yet, it will create it automatically.</div>
-
-  <div class="controls">
-    <div class="tiny"><b>Apps Script Web App URL</b> (paste your <code>.../exec</code> URL once, it’ll be saved in your browser)</div>
-    <input id="scriptUrl" type="text" placeholder="https://script.google.com/macros/s/XXXXX/exec" />
-    <div class="tiny">Tip: if you ever redeploy and your URL changes, paste the new one here.</div>
+  <div class="muted">
+    Tap a button to add <b>+1</b> for today.  
+    If today isn’t in the sheet yet, it will be created automatically.
   </div>
 
   <div class="grid" id="buttons"></div>
@@ -47,7 +42,7 @@
         <div><b>Today</b> <span class="pill" id="todayDate">—</span></div>
         <div class="muted">Progress vs daily targets</div>
       </div>
-      <div class="muted" id="status">Not loaded yet</div>
+      <div class="muted" id="status">Loading…</div>
     </div>
     <div id="todayCards"></div>
   </div>
@@ -65,12 +60,11 @@
 
   <div class="footer">
     <div class="tiny">
-      Notes:
       <ul>
         <li>Weekly view is a rolling last-7-days window.</li>
-        <li>Vegetables target is scored against <b>3/day</b> (since it’s “3+”).</li>
-        <li>Dairy target is scored against <b>2/day</b> (since it’s “1–2”).</li>
-        <li>Sugar has a daily target of 1, and a weekly max of 10.</li>
+        <li>Vegetables are scored against <b>3/day</b>.</li>
+        <li>Dairy is scored against <b>2/day</b>.</li>
+        <li>Sugar has a weekly max of <b>10</b>.</li>
       </ul>
     </div>
     <div class="err" id="error"></div>
@@ -78,16 +72,10 @@
 
 <script>
 (() => {
-  const GROUPS = [
-    { key: 'Grains', label: 'Grains' },
-    { key: 'Vegetables', label: 'Vegetables' },
-    { key: 'Fruits', label: 'Fruits' },
-    { key: 'Protein', label: 'Protein' },
-    { key: 'Dairy', label: 'Dairy' },
-    { key: 'Sugar', label: 'Sugar' },
-  ];
+  const SCRIPT_URL =
+    'https://script.google.com/macros/s/AKfycbxJWh1BoUF50olPuZZMkIRTPkyBTIa1lf124PmFF6QiTwkY-PgdVZsZn95SAETMSvHn1w/exec';
 
-  const LS_KEY = 'foodTracker_scriptUrl';
+  const GROUPS = ['Grains','Vegetables','Fruits','Protein','Dairy','Sugar'];
 
   const els = {
     buttons: document.getElementById('buttons'),
@@ -96,184 +84,103 @@
     todayCards: document.getElementById('todayCards'),
     weekTable: document.getElementById('weekTable'),
     sugarCapPill: document.getElementById('sugarCapPill'),
-    error: document.getElementById('error'),
-    scriptUrl: document.getElementById('scriptUrl'),
+    error: document.getElementById('error')
   };
 
-  // Load stored script URL
-  els.scriptUrl.value = localStorage.getItem(LS_KEY) || '';
-  els.scriptUrl.addEventListener('change', () => {
-    localStorage.setItem(LS_KEY, els.scriptUrl.value.trim());
-    safeLoadSummary();
-  });
-
-  function getScriptUrl() {
-    return (els.scriptUrl.value || '').trim().replace(/\/+$/, '');
+  function pct(v, t) {
+    return t > 0 ? Math.min(100, Math.round((v / t) * 100)) : 0;
   }
 
-  function setError(msg) {
-    els.error.textContent = msg || '';
+  function pillClass(v, t, cap=false) {
+    return cap ? (v > t ? 'warn' : 'ok') : (v >= t ? 'ok' : 'warn');
   }
 
-  function setStatus(msg) {
-    els.status.textContent = msg || '';
+  async function api(params) {
+    const u = new URL(SCRIPT_URL);
+    Object.entries(params).forEach(([k,v]) => u.searchParams.set(k,v));
+    const r = await fetch(u);
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    return j;
   }
 
-  function disableButtons(disabled) {
-    [...els.buttons.querySelectorAll('button')].forEach(b => b.disabled = !!disabled);
-  }
-
-  function pct(n, d) {
-    if (!d || d <= 0) return 0;
-    return Math.max(0, Math.min(100, Math.round((n / d) * 100)));
-  }
-
-  function pillClass(current, target, isSugarWeekly=false) {
-    // For sugar weekly, exceeding is "warn"
-    if (isSugarWeekly) return current > target ? 'warn' : 'ok';
-    return current >= target ? 'ok' : 'warn';
-  }
-
-  function ensureUrlOrExplain() {
-    const url = getScriptUrl();
-    if (!url) {
-      setStatus('Paste your Apps Script Web App URL above to begin.');
-      return null;
-    }
-    return url;
-  }
-
-  async function callApi(params) {
-    const base = ensureUrlOrExplain();
-    if (!base) throw new Error('Missing Apps Script Web App URL.');
-
-    const u = new URL(base);
-    Object.entries(params).forEach(([k, v]) => u.searchParams.set(k, v));
-
-    const res = await fetch(u.toString(), { method: 'GET' });
-    const data = await res.json();
-    if (data && data.error) throw new Error(data.error);
-    return data;
-  }
-
-  async function addOne(groupKey) {
+  async function addOne(group) {
     try {
-      setError('');
-      setStatus(`Adding +1 to ${groupKey}…`);
-      disableButtons(true);
-      const data = await callApi({ action: 'add', group: groupKey });
+      els.status.textContent = `Adding +1 ${group}…`;
+      const data = await api({ action:'add', group });
       render(data);
-      setStatus(`Added +1 to ${groupKey}.`);
+      els.status.textContent = `Added +1 ${group}`;
     } catch (e) {
-      setStatus('Error');
-      setError(String(e));
-    } finally {
-      disableButtons(false);
+      els.status.textContent = 'Error';
+      els.error.textContent = e;
     }
   }
 
-  async function safeLoadSummary() {
+  async function load() {
     try {
-      setError('');
-      const url = ensureUrlOrExplain();
-      if (!url) return;
-      setStatus('Loading…');
-      disableButtons(true);
-      const data = await callApi({ action: 'summary' });
+      els.status.textContent = 'Loading…';
+      const data = await api({ action:'summary' });
       render(data);
-      setStatus('Loaded.');
+      els.status.textContent = 'Ready';
     } catch (e) {
-      setStatus('Error');
-      setError(String(e));
-    } finally {
-      disableButtons(false);
+      els.status.textContent = 'Error';
+      els.error.textContent = e;
     }
   }
 
   function render(data) {
-    if (!data) return;
+    const { targets, today, last7, date } = data;
+    els.todayDate.textContent = date;
 
-    const targets = data.targets || {};
-    const today = data.today || {};
-    const last7 = data.last7 || {};
-
-    els.todayDate.textContent = data.date || '—';
-
-    // Today cards
     els.todayCards.innerHTML = '';
     GROUPS.forEach(g => {
-      const t = targets[g.key]?.daily ?? 0;
-      const v = today[g.key] ?? 0;
+      const v = today[g] || 0;
+      const t = targets[g].daily;
       const p = pct(v, t);
 
-      const wrap = document.createElement('div');
-      wrap.className = 'card';
-      wrap.style.margin = '10px 0';
-
-      const pill = document.createElement('span');
-      pill.className = `pill ${pillClass(v, t)}`;
-      pill.textContent = `${v} / ${t}`;
-
-      wrap.innerHTML = `
-        <div class="row">
-          <div><b>${g.label}</b></div>
-          <div class="right"></div>
-        </div>
-        <div class="bar"><div style="width:${p}%"></div></div>
-        <div class="tiny">${p}% of daily target</div>
-      `;
-      wrap.querySelector('.right').appendChild(pill);
-      els.todayCards.appendChild(wrap);
+      els.todayCards.innerHTML += `
+        <div class="card">
+          <div class="row">
+            <div><b>${g}</b></div>
+            <div class="pill ${pillClass(v,t)}">${v} / ${t}</div>
+          </div>
+          <div class="bar"><div style="width:${p}%"></div></div>
+          <div class="tiny">${p}% of daily target</div>
+        </div>`;
     });
-
-    // Week table
-    const rows = GROUPS.map(g => {
-      const wt = targets[g.key]?.weekly ?? 0;
-      const wv = last7[g.key] ?? 0;
-
-      const isSugar = g.key === 'Sugar';
-      const klass = pillClass(wv, wt, isSugar);
-      const label = isSugar ? `${wv} / ${wt} (max)` : `${wv} / ${wt}`;
-
-      return `
-        <tr>
-          <td><b>${g.label}</b></td>
-          <td class="right"><span class="pill ${klass}">${label}</span></td>
-        </tr>
-      `;
-    }).join('');
 
     els.weekTable.innerHTML = `
       <table>
-        <thead>
-          <tr>
-            <th>Food Group</th>
-            <th class="right">Last 7 days</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-    `;
+        <thead><tr><th>Food Group</th><th class="right">Last 7 days</th></tr></thead>
+        <tbody>
+          ${GROUPS.map(g => {
+            const v = last7[g] || 0;
+            const t = targets[g].weekly;
+            return `<tr>
+              <td><b>${g}</b></td>
+              <td class="right">
+                <span class="pill ${pillClass(v,t,g==='Sugar')}">
+                  ${v} / ${t}${g==='Sugar'?' max':''}
+                </span>
+              </td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>`;
 
-    // Sugar cap pill
-    const sugarW = last7.Sugar ?? 0;
-    const sugarTarget = targets.Sugar?.weekly ?? 10;
-    els.sugarCapPill.className = `pill ${pillClass(sugarW, sugarTarget, true)}`;
-    els.sugarCapPill.textContent = `Sugar weekly max: ${sugarTarget} (currently ${sugarW})`;
+    const s = last7.Sugar || 0;
+    els.sugarCapPill.className = `pill ${pillClass(s, targets.Sugar.weekly, true)}`;
+    els.sugarCapPill.textContent = `Sugar weekly max: ${targets.Sugar.weekly} (currently ${s})`;
   }
 
-  function initButtons() {
-    els.buttons.innerHTML = '';
-    GROUPS.forEach(g => {
-      const b = document.createElement('button');
-      b.textContent = `+1 ${g.label}`;
-      b.addEventListener('click', () => addOne(g.key));
-      els.buttons.appendChild(b);
-    });
-  }
+  GROUPS.forEach(g => {
+    const b = document.createElement('button');
+    b.textContent = `+1 ${g}`;
+    b.onclick = () => addOne(g);
+    els.buttons.appendChild(b);
+  });
 
-  initButtons();
-  safeLoadSummary();
+  load();
 })();
 </script>
 </body>
