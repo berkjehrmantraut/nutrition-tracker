@@ -25,12 +25,13 @@
     .footer { margin-top: 18px; font-size: 13px; color: #555; }
     .tiny { font-size: 12px; color: #666; margin-top: 4px; }
     .err { color: #c00; white-space: pre-wrap; }
+    .tiny b { color: #333; }
   </style>
 </head>
 <body>
   <h1>Food Group Tracker</h1>
   <div class="muted">
-    Tap a button to add <b>+1</b> for today.  
+    Tap a button to add <b>+1</b> for today.
     If today isn’t in the sheet yet, it will be created automatically.
   </div>
 
@@ -77,6 +78,39 @@
 
   const GROUPS = ['Grains','Vegetables','Fruits','Protein','Dairy','Sugar'];
 
+  const EXAMPLES = {
+    Grains: [
+      "1 slice whole-grain bread",
+      "½ cup cooked rice/pasta/quinoa",
+      "1 cup whole-grain cereal flakes"
+    ],
+    Vegetables: [
+      "1 cup raw or cooked vegetables",
+      "2 cups leafy greens"
+    ],
+    Fruits: [
+      "1 medium fruit (apple/banana/orange)",
+      "1 cup cut fruit or berries",
+      "½ cup dried fruit"
+    ],
+    Protein: [
+      "3 oz cooked meat/poultry/fish (deck of cards)",
+      "2 eggs",
+      "1 cup cooked beans or lentils",
+      "¾ cup firm tofu",
+      "1 oz nuts (small handful)"
+    ],
+    Dairy: [
+      "1 cup milk or yogurt",
+      "1½ oz cheese",
+      "1 cup fortified soy/almond milk"
+    ],
+    Sugar: [
+      "1 sweet serving (cookie/candy/soda)",
+      "Daily target 1; weekly max 10"
+    ]
+  };
+
   const els = {
     buttons: document.getElementById('buttons'),
     todayDate: document.getElementById('todayDate'),
@@ -110,6 +144,7 @@
       const data = await api({ action:'add', group });
       render(data.summary || data);
       els.status.textContent = `Added +1 ${group}`;
+      els.error.textContent = '';
     } catch (e) {
       els.status.textContent = 'Error';
       els.error.textContent = e;
@@ -122,6 +157,7 @@
       const data = await api({ action:'summary' });
       render(data);
       els.status.textContent = 'Ready';
+      els.error.textContent = '';
     } catch (e) {
       els.status.textContent = 'Error';
       els.error.textContent = e;
@@ -134,9 +170,10 @@
 
     els.todayCards.innerHTML = '';
     GROUPS.forEach(g => {
-      const v = today[g] || 0;
+      const v = (today && today[g]) ? today[g] : 0;
       const t = targets[g].daily;
       const p = pct(v, t);
+      const ex = (EXAMPLES[g] || []).join(" • ");
 
       els.todayCards.innerHTML += `
         <div class="card">
@@ -146,6 +183,7 @@
           </div>
           <div class="bar"><div style="width:${p}%"></div></div>
           <div class="tiny">${p}% of daily target</div>
+          <div class="tiny"><b>Examples:</b> ${ex}</div>
         </div>`;
     });
 
