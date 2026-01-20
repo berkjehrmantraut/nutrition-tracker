@@ -108,7 +108,7 @@
     try {
       els.status.textContent = `Adding +1 ${group}…`;
       const data = await api({ action:'add', group });
-      render(data);
+      render(data.summary || data);
       els.status.textContent = `Added +1 ${group}`;
     } catch (e) {
       els.status.textContent = 'Error';
